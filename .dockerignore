@@ -1,0 +1,13 @@
+.git
+.gitattributes
+.gradle
+.idea
+.vscode
+**/build
+out
+*.iml
+*.log
+.env
+docker
+docker-compose.yml
+README.md

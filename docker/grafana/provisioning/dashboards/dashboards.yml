@@ -1,0 +1,10 @@
+apiVersion: 1
+
+providers:
+  - name: blockchain-handler
+    folder: Blockchain Handler
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards

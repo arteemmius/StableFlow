@@ -1,0 +1,9 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/changes/001-create-transactions.sql
+  - include:
+      file: db/changelog/changes/002-create-ethereum-events.sql
+  - include:
+      file: db/changelog/changes/003-partition-management-functions.sql
+  - include:
+      file: db/changelog/changes/004-create-initial-partitions.sql

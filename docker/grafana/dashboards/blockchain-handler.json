@@ -1,0 +1,284 @@
+{
+  "uid": "blockchain-handler",
+  "title": "Blockchain Handler",
+  "description": "USDC Transfer pipeline: ingestion, Kafka processing, REST API and cache",
+  "tags": ["ethereum", "kafka", "spring-boot"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Pipeline",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Node subscription",
+      "description": "ethereum_node_connected: 1 while the WebSocket log subscription is active",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "targets": [ { "refId": "A", "expr": "max(ethereum_node_connected)" } ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "type": "value", "options": {
+              "0": { "text": "DOWN", "color": "red", "index": 0 },
+              "1": { "text": "SUBSCRIBED", "color": "green", "index": 1 } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Events received / s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "targets": [ { "refId": "A", "expr": "sum(rate(ethereum_events_received_total[5m]))" } ],
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 1, "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
+      "options": {
+        "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Events processed / s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "targets": [ { "refId": "A", "expr": "sum(rate(ethereum_events_processed_total[5m]))" } ],
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 1, "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
+      "options": {
+        "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Dead letters (1h)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "targets": [ { "refId": "A", "expr": "sum(increase(ethereum_events_dlq_total[1h])) or vector(0)" } ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Pending projections",
+      "description": "Journaled events whose projection failed and waits for the retry worker",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "targets": [ { "refId": "A", "expr": "max(ethereum_events_pending)" } ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 100 } ] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Kafka consumer lag",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "targets": [ { "refId": "A", "expr": "max(kafka_consumer_fetch_manager_records_lag_max)" } ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1000 }, { "color": "red", "value": 10000 } ] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Events received by source",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 5 },
+      "targets": [ { "refId": "A", "expr": "sum by (source) (rate(ethereum_events_received_total[1m]))", "legendFormat": "{{source}}" } ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Events processed by outcome",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 5 },
+      "targets": [ { "refId": "A", "expr": "sum by (outcome) (rate(ethereum_events_processed_total[1m]))", "legendFormat": "{{outcome}}" } ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Processing time (decode, enrich, journal, project)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 5 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(ethereum_events_processing_time_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(ethereum_events_processing_time_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(ethereum_events_processing_time_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Dead letters by reason",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 13 },
+      "targets": [ { "refId": "A", "expr": "sum by (reason) (increase(ethereum_events_dlq_total[5m]))", "legendFormat": "{{reason}}" } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Reconnects and failures (5m)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 13 },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(ethereum_node_reconnects_total[5m])) or vector(0)", "legendFormat": "node reconnects" },
+        { "refId": "B", "expr": "sum(increase(ethereum_events_publish_failures_total[5m])) or vector(0)", "legendFormat": "Kafka publish failures" },
+        { "refId": "C", "expr": "sum(increase(ethereum_events_projection_failures_total[5m])) or vector(0)", "legendFormat": "projection failures" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Kafka consumer lag",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 13 },
+      "targets": [ { "refId": "A", "expr": "max by (client_id) (kafka_consumer_fetch_manager_records_lag_max)", "legendFormat": "{{client_id}}" } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "REST API and cache",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "panels": []
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "API requests / s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 22 },
+      "targets": [ { "refId": "A", "expr": "sum by (uri, status) (rate(http_server_requests_seconds_count{uri=~\"/api/.*\"}[1m]))", "legendFormat": "{{status}} {{uri}}" } ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "API latency p95",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 22 },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{uri=~\"/api/.*\"}[5m])))", "legendFormat": "{{uri}}" } ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Cache hit ratio",
+      "description": "block-timestamps should stay close to 100%: USDC emits ~70 transfers per block",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 22 },
+      "targets": [ { "refId": "A", "expr": "sum by (cache) (rate(cache_gets_total{result=\"hit\"}[5m])) / sum by (cache) (rate(cache_gets_total[5m]))", "legendFormat": "{{cache}}" } ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "JVM and infrastructure",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
+      "panels": []
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "JVM heap used",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 31 },
+      "targets": [ { "refId": "A", "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})", "legendFormat": "used" },
+                   { "refId": "B", "expr": "sum(jvm_memory_max_bytes{area=\"heap\"})", "legendFormat": "max" } ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Database connections",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 31 },
+      "targets": [ { "refId": "A", "expr": "sum(hikaricp_connections_active)", "legendFormat": "active" },
+                   { "refId": "B", "expr": "sum(hikaricp_connections_pending)", "legendFormat": "pending" } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Cache errors (Redis unavailable)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 31 },
+      "targets": [ { "refId": "A", "expr": "sum by (cache, operation) (increase(cache_errors_total[5m])) or vector(0)", "legendFormat": "{{cache}} {{operation}}" } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    }
+  ]
+}

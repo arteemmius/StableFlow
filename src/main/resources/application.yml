@@ -1,0 +1,163 @@
+# All secrets, URLs and addresses come from environment variables; the defaults target the local
+# docker-compose stack (see .env.example) and the public Ethereum RPC of publicnode.com.
+spring:
+  application:
+    name: blockchain-handler
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/blockchain_handler}
+    username: ${DB_USERNAME:blockchain}
+    password: ${DB_PASSWORD:blockchain}
+    hikari:
+      pool-name: blockchain-handler-db
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+  jpa:
+    open-in-view: false
+    hibernate:
+      # The schema is owned by Liquibase.
+      ddl-auto: none
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 500ms
+      connect-timeout: 2s
+      # Redis is used as a cache and checkpoint store only, not for Spring Data repositories.
+      repositories:
+        enabled: false
+  cache:
+    type: redis
+    redis:
+      enable-statistics: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Values are JSON bytes; see KafkaConfig for why byte[] is used on the wire.
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      acks: all
+      compression-type: lz4
+      properties:
+        enable.idempotence: true
+        linger.ms: 5
+        max.block.ms: 10000
+        request.timeout.ms: 10000
+        delivery.timeout.ms: 30000
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:blockchain-handler-processor}
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      max-poll-records: 100
+    listener:
+      concurrency: ${KAFKA_LISTENER_CONCURRENCY:3}
+      # Continues the trace started by the ingestion from the Kafka record headers.
+      observation-enabled: true
+    template:
+      observation-enabled: true
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+      group:
+        # The API serves stored data even while the node subscription reconnects.
+        readiness:
+          include: readinessState, db, redis
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        "[http.server.requests]": true
+  tracing:
+    sampling:
+      probability: 1.0
+
+springdoc:
+  api-docs:
+    enabled: ${API_DOCS_ENABLED:true}
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${API_DOCS_ENABLED:true}
+    path: /swagger-ui.html
+  default-produces-media-type: application/json
+
+app:
+  ethereum:
+    ws-url: ${ETH_WS_URL:wss://ethereum-rpc.publicnode.com}
+    http-url: ${ETH_HTTP_URL:https://ethereum-rpc.publicnode.com}
+    chain-id: ${ETH_CHAIN_ID:1}
+    http-connect-timeout: 5s
+    http-read-timeout: 10s
+  usdc:
+    contract-address: ${USDC_CONTRACT_ADDRESS:0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48}
+    decimals: 6
+  ingestion:
+    enabled: ${INGESTION_ENABLED:true}
+    reconnect:
+      initial-delay: 1s
+      max-delay: 60s
+      multiplier: 2.0
+      jitter: 0.2
+    heartbeat-interval: 30s
+    # USDC emits ~70 transfers per block; two silent minutes mean a dead subscription.
+    stale-subscription-timeout: 2m
+    watchdog-interval: 30s
+    checkpoint-flush-interval: 10s
+    backfill:
+      enabled: true
+      max-blocks: 1000
+      chunk-size: 50
+  kafka:
+    topics:
+      events: ethereum-events
+      dead-letter: ethereum-events-dlq
+      partitions: 3
+      replicas: 1
+      dead-letter-retention: 14d
+    retry:
+      max-retries: 5
+      initial-interval: 1s
+      multiplier: 2.0
+      max-interval: 30s
+  processing:
+    projection-retry:
+      enabled: true
+      poll-interval: PT30S
+      batch-size: 100
+      max-retries: 10
+      base-backoff: 30s
+    partitions:
+      months-ahead: 3
+      maintenance-cron: "0 0 3 * * *"
+  cache:
+    key-prefix: "blockchain-handler:"
+    generation-ttl: 1d
+    ttl:
+      transfers: 60s
+      transaction-details: 60s
+      daily-stats: 60s
+      block-timestamps: 1h

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="blockchain-handler"/>
+
+    <!-- Human-readable logs for local development: SPRING_PROFILES_ACTIVE=local.
+         The default pattern already contains [traceId-spanId] when tracing is on the classpath. -->
+    <springProfile name="local">
+        <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- Structured JSON logs (Logstash format) in every other environment. MDC entries such as
+         traceId, spanId, txHash, blockNumber and logIndex become JSON fields. -->
+    <springProfile name="!local">
+        <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <customFields>{"service":"${APP_NAME}"}</customFields>
+                <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
+                    <maxDepthPerThrowable>30</maxDepthPerThrowable>
+                    <maxLength>8192</maxLength>
+                    <rootCauseFirst>true</rootCauseFirst>
+                </throwableConverter>
+            </encoder>
+        </appender>
+        <appender name="ASYNC_JSON" class="ch.qos.logback.classic.AsyncAppender">
+            <queueSize>8192</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>true</neverBlock>
+            <appender-ref ref="JSON"/>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="ASYNC_JSON"/>
+        </root>
+    </springProfile>
+
+    <logger name="com.blockchainhandler" level="INFO"/>
+    <logger name="org.apache.kafka" level="WARN"/>
+    <!-- web3j logs the full node URL, which may contain an API key, on WebSocket errors. Connection problems
+         are reported by EthereumLogSubscriber with a masked URL instead. -->
+    <logger name="org.web3j.protocol.websocket" level="OFF"/>
+</configuration>

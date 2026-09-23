@@ -1,0 +1,20 @@
+# Integration tests: infrastructure comes from Testcontainers (@ServiceConnection), the node is a MockWebServer stub.
+app:
+  ingestion:
+    # Tests publish events to Kafka themselves.
+    enabled: false
+  kafka:
+    retry:
+      max-retries: 2
+      initial-interval: 100ms
+      multiplier: 2.0
+      max-interval: 200ms
+  processing:
+    projection-retry:
+      # Tests run the worker explicitly.
+      enabled: false
+
+spring:
+  kafka:
+    consumer:
+      group-id: blockchain-handler-it
