@@ -3,6 +3,7 @@ package com.blockchainhandler.api.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
@@ -12,11 +13,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.blockchainhandler.api.dto.CursorPageResponse;
 import com.blockchainhandler.api.dto.PageResponse;
 import com.blockchainhandler.api.dto.TransactionDetailsResponse;
 import com.blockchainhandler.api.dto.TransferResponse;
 import com.blockchainhandler.api.error.ResourceNotFoundException;
 import com.blockchainhandler.api.service.StatsService;
+import com.blockchainhandler.api.service.TransferCursor;
+import com.blockchainhandler.api.service.TransferFeedCriteria;
 import com.blockchainhandler.api.service.TransferQueryService;
 import com.blockchainhandler.api.service.TransferSearchCriteria;
 import com.blockchainhandler.testsupport.UsdcTransfers;
@@ -108,6 +112,60 @@ class TransferControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[0].field").value("size"));
         mockMvc.perform(get("/api/v1/transfers").param("address", ADDRESS)
+                        .param("from", "2026-10-01T00:00:00Z").param("to", "2026-09-01T00:00:00Z"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("from"));
+        verifyNoInteractions(transferQueryService);
+    }
+
+    @Test
+    @DisplayName("GET /transfers/latest returns a cursor page of all addresses and normalizes the query")
+    void findsLatestTransfers() throws Exception {
+        String nextCursor = new TransferCursor(UsdcTransfers.BLOCK_TIMESTAMP, UsdcTransfers.LOG_INDEX, 987).encode();
+        given(transferQueryService.findLatest(any()))
+                .willReturn(new CursorPageResponse<>(List.of(sampleTransfer()), 20, true, nextCursor));
+
+        mockMvc.perform(get("/api/v1/transfers/latest"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.content[0].transactionHash").value(UsdcTransfers.TX_HASH))
+                .andExpect(jsonPath("$.size").value(20))
+                .andExpect(jsonPath("$.hasNext").value(true))
+                .andExpect(jsonPath("$.nextCursor").value(nextCursor));
+
+        verify(transferQueryService).findLatest(new TransferFeedCriteria(
+                TransferSearchCriteria.UNBOUNDED_FROM, TransferCursor.before(TransferSearchCriteria.UNBOUNDED_TO), 20));
+    }
+
+    @Test
+    @DisplayName("GET /transfers/latest passes the time range, the page size and the cursor through")
+    void passesFeedParameters() throws Exception {
+        given(transferQueryService.findLatest(any())).willReturn(new CursorPageResponse<>(List.of(), 50, false, null));
+        TransferCursor cursor = new TransferCursor(Instant.parse("2026-09-15T08:00:00Z"), 7, 42);
+
+        mockMvc.perform(get("/api/v1/transfers/latest")
+                        .param("from", "2026-09-01T00:00:00Z")
+                        .param("to", "2026-10-01T00:00:00Z")
+                        .param("size", "50")
+                        .param("cursor", cursor.encode()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.hasNext").value(false))
+                .andExpect(jsonPath("$.nextCursor").value(nullValue()));
+
+        verify(transferQueryService).findLatest(new TransferFeedCriteria(Instant.parse("2026-09-01T00:00:00Z"), cursor, 50));
+    }
+
+    @Test
+    @DisplayName("GET /transfers/latest rejects a forged cursor, a too large page and an inverted time range")
+    void rejectsInvalidFeedQueries() throws Exception {
+        mockMvc.perform(get("/api/v1/transfers/latest").param("cursor", "not-a-cursor"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.errors[0].field").value("cursor"));
+        mockMvc.perform(get("/api/v1/transfers/latest").param("size", "101"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("size"));
+        mockMvc.perform(get("/api/v1/transfers/latest")
                         .param("from", "2026-10-01T00:00:00Z").param("to", "2026-09-01T00:00:00Z"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[0].field").value("from"));

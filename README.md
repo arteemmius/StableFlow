@@ -136,6 +136,27 @@ web3j-класс `websocket.events.Log` теряет флаг `removed`, поэ�
 
 Вместо identity-колонки используется sequence: identity на партиционированных таблицах появился только в PostgreSQL 17.
 
+### Лента без адреса: keyset-пагинация
+`GET /api/v1/transfers/latest` отдаёт переводы всех адресов. Номеров страниц у неё нет: таблица растёт на ~500 тыс. строк в сутки, поэтому `COUNT(*)` для `totalElements` стоил бы секунды, а `OFFSET` замедлялся бы с глубиной линейно. Вместо номера клиент получает непрозрачный `nextCursor` — позицию последней строки `(block_timestamp, log_index, id)` — и передаёт его в следующий запрос:
+
+```sql
+WHERE (block_timestamp, log_index, id) < (:ts, :logIndex, :id) AND block_timestamp >= :from
+ORDER BY block_timestamp DESC, log_index DESC, id DESC
+LIMIT :size + 1   -- лишняя строка отвечает на hasNext без COUNT
+```
+
+- **Сравнение кортежей — это `Index Cond`.** Индекс `(block_timestamp, log_index, id)` сканируется назад прямо от позиции курсора. Любая страница читает `size + 1` записей индекса, какой бы глубокой она ни была. Форма `a < x OR (a = x AND …)`, которую генерирует keyset scrolling Spring Data, стала бы фильтром по всем более новым строкам. Замер на 1 млн строк, страница на глубине 90 %:
+
+  | Способ | Время | Буферы |
+  |---|---|---|
+  | кортеж | 0,2 мс | 14 |
+  | `OR`-форма | 206 мс | 46 тыс. |
+  | `OFFSET` | 147 мс | 46 тыс. |
+
+- **`id` разрешает ничьи.** Пока удаление реорга не обработано, осиротевший и канонический блоки могут одновременно содержать переводы с одинаковыми `(block_timestamp, log_index)`. Без `id` граница страницы между ними потеряла бы строку.
+- **`to` — это тоже курсор.** Первая страница начинается с позиции `(to, -1, -1)`: `log_index ≥ 0`, поэтому условие совпадает с `block_timestamp < to`. С курсором берётся меньшая из двух позиций. В итоге у ведущей колонки одна верхняя граница, и PostgreSQL не приходится выбирать, с какой начинать сканирование.
+- **Индекс возрастающий.** Новые строки попадают в правый лист B-дерева: там работает fast path вставки, а сплиты оставляют страницы заполненными на fillfactor. У убывающего индекса вставки шли бы в левый лист со сплитами 50/50. На 1 млн вставок по времени это 67 МБ против 37 МБ. Индекс создаётся через `CREATE INDEX CONCURRENTLY`, чтобы миграция на живой таблице не блокировала проекцию.
+
 ### Кэш
 | Кэш | TTL | Инвалидация |
 |---|---|---|
@@ -145,6 +166,8 @@ web3j-класс `websocket.events.Log` теряет флаг `removed`, поэ�
 | `block-timestamps` | 1 ч | не нужна (блок неизменен) |
 
 **Поколения.** Ключ страницы строится как `address|g<generation>|from|to|page|size`. Когда консьюмер **после коммита** проекции ставит новое случайное поколение адреса, все закэшированные страницы этого адреса становятся недостижимы. Это O(1): без `SCAN`/`KEYS` и без индексных множеств. Бонус — нет гонки: медленный запрос, прочитавший БД до коммита, положит результат под **старым** поколением, и его никто не прочитает.
+
+**Лента `/transfers/latest` не кэшируется.** Её первая страница меняется ~6 раз/с, так что инвалидация обнулила бы hit-rate, как у `daily-stats`. К тому же любая страница ленты — это чтение `size + 1` записей индекса.
 
 Остальное:
 - значения сериализуются типизированным Jackson-сериализатором на каждый кэш, без polymorphic typing;
@@ -162,7 +185,7 @@ web3j-класс `websocket.events.Log` теряет флаг `removed`, поэ�
 | колонка `timestamp` | `block_timestamp` | `timestamp` — зарезервированное слово SQL; явное имя говорит, что это время блока. |
 | `transactions`: tx_hash, block_number, from, to, value_usdc, … | + `log_index`, `block_hash`, `contract_address`, `value_raw` | В одной транзакции бывает несколько Transfer, поэтому без `log_index` нет идемпотентности. `block_hash` нужен для реоргов, `contract_address` — для `stats?token=`, `value_raw` — для точного uint256. |
 | `ethereum_events`: … | + `log_index`, `block_hash`, `removed`, `created_at` | Уникальный ключ наблюдения лога и реорги. |
-| индексы `(from_address, timestamp)`, `(block_number)`, `(processed, retry_count)` | + `(to_address, block_timestamp)`, `(tx_hash)`, `(contract_address, block_timestamp)`. Индекс воркера — частичный `WHERE processed = false` | Поиск по адресу — это «отправитель ИЛИ получатель»; нужны детали транзакции и дневная статистика. |
+| индексы `(from_address, timestamp)`, `(block_number)`, `(processed, retry_count)` | + `(to_address, block_timestamp)`, `(block_timestamp, log_index, id)`, `(tx_hash)`, `(contract_address, block_timestamp)`. Индекс воркера — частичный `WHERE processed = false` | Поиск по адресу — это «отправитель ИЛИ получатель»; нужны лента без адреса, детали транзакции и дневная статистика. |
 | инвалидация кэша при новых событиях | для списков и деталей — да; дневная статистика — только TTL 60 с | см. раздел «Кэш». |
 | — | суммы в JSON — строки (`"23.270000"`) | BigDecimal/uint256 без потери точности в JS-клиентах. |
 | Uniswap V2 **Router**: `Swap` | не реализовано | ТЗ: «для начала достаточно USDC». К тому же `Swap` эмитит **Pair**-контракт, а не Router. |
@@ -201,6 +224,9 @@ curl -s "http://localhost:8080/api/v1/stats/daily?token=0xA0b86991c6218b36c1d19D
 
 # переводы адреса (например, горячего кошелька биржи)
 curl -s "http://localhost:8080/api/v1/transfers?address=0x28C6c06298d514Db089934071355E5743bf21d60&size=5" | jq
+
+# последние переводы всех адресов
+curl -s "http://localhost:8080/api/v1/transfers/latest?size=5" | jq
 
 # логи приложения (JSON, у каждого события свой traceId)
 docker compose logs -f app
@@ -294,6 +320,38 @@ SPRING_PROFILES_ACTIVE=local ./gradlew bootRun     # профиль local — ч
   "totalPages": 1,
   "hasNext": false
 }
+```
+
+### `GET /api/v1/transfers/latest` — последние переводы всех адресов
+
+| Параметр | Обяз. | Описание |
+|---|---|---|
+| `size` | нет | 1..100, по умолчанию 20. |
+| `from` | нет | Нижняя граница `blockTimestamp` включительно, ISO-8601. |
+| `to` | нет | Верхняя граница, **не** включительно. |
+| `cursor` | нет | `nextCursor` из предыдущего ответа; `from`/`to` передаются те же. |
+
+Сортировка — от новых к старым. Пагинация курсорная (см. [«Лента без адреса»](#лента-без-адреса-keyset-пагинация)): вместо номера страницы и `totalElements` в ответе есть `nextCursor`, на последней странице он `null`. Элементы — те же переводы, что и в списке по адресу.
+
+```json
+{
+  "content": [ { "…": "как в списке по адресу" } ],
+  "size": 20,
+  "hasNext": true,
+  "nextCursor": "MjAyNi0wOS0yM1QxMDo1MDozNVp8MTN8OTg3"
+}
+```
+
+Выгрузка за сутки в JSON Lines — цикл до `hasNext = false`:
+
+```bash
+url="http://localhost:8080/api/v1/transfers/latest?size=100&from=2026-09-01T00:00:00Z&to=2026-09-02T00:00:00Z"
+page=$(curl -s "$url")
+echo "$page" | jq -c '.content[]' > transfers.jsonl
+while [ "$(echo "$page" | jq -r .hasNext)" = true ]; do
+  page=$(curl -s "$url&cursor=$(echo "$page" | jq -r .nextCursor)")
+  echo "$page" | jq -c '.content[]' >> transfers.jsonl
+done
 ```
 
 ### `GET /api/v1/transfers/{txHash}` — детали транзакции
@@ -399,7 +457,7 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-s
 
 - **`transactions`** — read model, одна строка на Transfer-лог.
   - `UNIQUE (block_hash, log_index)`;
-  - индексы `(from_address, block_timestamp DESC)`, `(to_address, block_timestamp DESC)`, `(block_number)`, `(tx_hash)`, `(contract_address, block_timestamp)`;
+  - индексы `(from_address, block_timestamp DESC)`, `(to_address, block_timestamp DESC)`, `(block_timestamp, log_index, id)` (лента без адреса), `(block_number)`, `(tx_hash)`, `(contract_address, block_timestamp)`;
   - `value_raw NUMERIC(78,0)` вмещает весь uint256, `value_usdc NUMERIC(38,6)`.
 - **`ethereum_events`** — журнал, `PARTITION BY RANGE (block_timestamp)` по месяцам (`ethereum_events_2026_09`, …).
   - `payload JSONB`, `processed`, `retry_count`, `last_attempt_at`;
@@ -474,6 +532,7 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-s
 - `PublishProgress`;
 - `EthereumLogSubscriber` с fake-нодой: подписка, переподключение, бэкфилл, checkpoint;
 - оркестрация обработки и метрики;
+- курсор ленты: кодирование, отказ на чужих токенах, порядок позиций, ограничение курсора границей `to`;
 - `@WebMvcTest` контроллеров: валидация, RFC 7807.
 
 **Integration** (`src/integrationTest`, отдельная Gradle test suite). Приложение запускается целиком против реальных контейнеров, а нода подменяется MockWebServer:
@@ -484,6 +543,7 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-s
 - **реорг-компенсация;**
 - **DLQ:** битый JSON с исходными байтами, нарушение контракта без ретраев, недоступная нода — ровно 3 попытки и DLQ, «отставшая» нода — успех после ретрая;
 - **API:** пагинация, фильтры, статистика, RFC 7807 с `traceId`;
+- **лента:** проход по курсору без пропусков и дублей, в том числе когда граница страницы проходит между «реорг-двойниками» с одинаковыми `(block_timestamp, log_index)`;
 - **журнал:** партиции по требованию, воркер ретраев проекций.
 
 Общие тестовые данные вынесены в `src/testFixtures` (Gradle `java-test-fixtures`).
@@ -521,7 +581,7 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-s
 - **Swap / Borrow.** Нужны новый `EventType`, декодер, проекция и таблица. Ingestion и журнал уже универсальны. Для Uniswap V2 надо подписываться на **Pair**-контракты (Router событий `Swap` не эмитит), для Aave V3 — на `Pool`.
 - **Несколько инстансов.** Обработку и API можно масштабировать горизонтально: группа консьюмеров, `SKIP LOCKED`, общий Redis. Ingestion стоит держать в одном инстансе (`INGESTION_ENABLED=false` в остальных) или добавить leader election (ShedLock / Kubernetes Lease). Дубли при этом безопасны, но расточительны.
 - **Подтверждения вместо компенсации.** Сейчас реорги компенсируются по `removed=true`. Если реорг случился, пока подписки не было, удаление не придёт. Для строгих сценариев стоит подтверждать блоки с глубиной N или периодически сверяться с `eth_getLogs` по хэшам блоков.
-- **Большие адреса.** Для кошельков бирж `COUNT(*)` для пагинации и `OR` по двум индексам дороги. Следующий шаг — keyset-пагинация и `UNION ALL` по индексам.
+- **Большие адреса.** Для кошельков бирж `COUNT(*)` для пагинации и `OR` по двум индексам дороги. Лента без адреса уже работает на keyset-пагинации. Для адресных списков следующий шаг тот же: курсор плюс `UNION ALL` по индексам `from_address` и `to_address`.
 - **Статистика.** `COUNT(DISTINCT)` по ~500 тыс. строк за день выполняется за сотни миллисекунд и прикрыт кэшем. Для продакшена стоит считать дневные агрегаты инкрементально в проекции.
 - **Хранение.** Партиции журнала дёшево удалять целиком (`DROP TABLE ethereum_events_2025_01`) — осталось добавить задачу retention. `transactions` растёт на ~500 тыс. строк в день, её тоже стоит партиционировать.
 - **Безопасность.** Аутентификация и rate limiting API, TLS/SASL для Kafka, секреты из Vault / Kubernetes Secrets.

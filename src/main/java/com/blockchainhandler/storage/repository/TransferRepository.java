@@ -44,6 +44,35 @@ public interface TransferRepository extends JpaRepository<TransferEntity, Long> 
             Pageable pageable);
 
     /**
+     * Finds the latest transfers of all addresses that precede a keyset position and are not older than
+     * {@code from}, ordered by {@code (blockTimestamp, logIndex, id)} descending.
+     *
+     * <p>The row comparison is an index condition of {@code idx_transactions_timestamp_log_id}: the backward scan
+     * starts right at the position, so a page reads {@code limit} index entries however deep it is. The expanded
+     * form {@code a < x OR (a = x AND ...)} would be a filter over every newer row instead.
+     *
+     * @param beforeTimestamp block timestamp of the exclusive upper bound position
+     * @param beforeLogIndex  log index of that position
+     * @param beforeId        row id of that position
+     * @param from            inclusive lower bound of the block timestamp
+     * @param limit           maximum number of rows
+     * @return transfers, newest first
+     */
+    @Query(nativeQuery = true, value = """
+            SELECT * FROM transactions
+            WHERE (block_timestamp, log_index, id) < (:beforeTimestamp, :beforeLogIndex, :beforeId)
+              AND block_timestamp >= :from
+            ORDER BY block_timestamp DESC, log_index DESC, id DESC
+            LIMIT :limit
+            """)
+    List<TransferEntity> findLatest(
+            @Param("beforeTimestamp") Instant beforeTimestamp,
+            @Param("beforeLogIndex") int beforeLogIndex,
+            @Param("beforeId") long beforeId,
+            @Param("from") Instant from,
+            @Param("limit") int limit);
+
+    /**
      * Returns all transfers of a transaction ordered by log index.
      *
      * @param txHash lower-case transaction hash

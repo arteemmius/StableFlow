@@ -1,5 +1,6 @@
 package com.blockchainhandler.api.service;
 
+import com.blockchainhandler.api.dto.CursorPageResponse;
 import com.blockchainhandler.api.dto.PageResponse;
 import com.blockchainhandler.api.dto.TransactionDetailsResponse;
 import com.blockchainhandler.api.dto.TransferResponse;
@@ -19,7 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Read-side queries over stored transfers, cached in Redis.
+ * Read-side queries over stored transfers. Transfer lists of an address and transaction details are cached in Redis.
  */
 @Service
 @RequiredArgsConstructor
@@ -46,6 +47,26 @@ public class TransferQueryService {
         return PageResponse.of(repository
                 .findByAddress(criteria.address(), criteria.from(), criteria.to(), pageRequest)
                 .map(mapper::toResponse));
+    }
+
+    /**
+     * Returns a page of the latest transfers of all addresses, newest first, using keyset pagination.
+     *
+     * <p>Not cached: the first page changes with every new transfer, which would keep the hit rate near zero, while
+     * any page is a range scan of {@code size + 1} index entries.
+     *
+     * @param criteria normalized feed criteria
+     * @return page of transfers with the cursor of the next page
+     */
+    public CursorPageResponse<TransferResponse> findLatest(TransferFeedCriteria criteria) {
+        TransferCursor before = criteria.before();
+        // One row more than requested tells whether a next page exists without counting.
+        List<TransferEntity> rows = repository.findLatest(
+                before.blockTimestamp(), before.logIndex(), before.id(), criteria.from(), criteria.size() + 1);
+        boolean hasNext = rows.size() > criteria.size();
+        List<TransferEntity> page = hasNext ? rows.subList(0, criteria.size()) : rows;
+        String nextCursor = hasNext ? TransferCursor.of(page.getLast()).encode() : null;
+        return new CursorPageResponse<>(mapper.toResponses(page), criteria.size(), hasNext, nextCursor);
     }
 
     /**

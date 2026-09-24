@@ -47,6 +47,42 @@ class TransferApiIT extends AbstractIntegrationTest {
     }
 
     @Test
+    @DisplayName("the feed of all addresses is paged newest first through the cursor, without gaps or duplicates")
+    void pagesThroughFeedWithCursor() {
+        // Other tests do not write into this window, so the feed restricted to it is deterministic.
+        Instant from = Instant.parse("2025-06-01T12:00:00Z");
+        Instant to = from.plusSeconds(36);
+        String sharedBlock = UsdcTransfers.randomHash();
+        seedAnyAddresses(from.minusSeconds(1), 0, UsdcTransfers.randomHash(), "0.100000");   // before 'from'
+        seedAnyAddresses(to, 0, UsdcTransfers.randomHash(), "0.200000");                     // 'to' is exclusive
+        // Competing blocks of a reorg: same timestamp and log index, told apart by the row id.
+        seedAnyAddresses(from, 5, UsdcTransfers.randomHash(), "1.000000");
+        seedAnyAddresses(from, 5, UsdcTransfers.randomHash(), "2.000000");
+        seedAnyAddresses(from.plusSeconds(12), 3, sharedBlock, "3.000000");
+        seedAnyAddresses(from.plusSeconds(12), 7, sharedBlock, "4.000000");
+        seedAnyAddresses(from.plusSeconds(24), 0, UsdcTransfers.randomHash(), "5.000000");
+
+        // Pages of 2 put a page boundary between the two reorg twins.
+        JsonNode page = get("/api/v1/transfers/latest?from={from}&to={to}&size=2", from, to);
+        List<String> feed = new ArrayList<>(values(page));
+        int pages = 1;
+        while (page.path("hasNext").asBoolean() && pages < 10) {
+            page = get("/api/v1/transfers/latest?from={from}&to={to}&size=2&cursor={cursor}",
+                    from, to, page.path("nextCursor").asText());
+            feed.addAll(values(page));
+            pages++;
+        }
+
+        assertThat(feed).containsExactly("5.000000", "4.000000", "3.000000", "2.000000", "1.000000");
+        assertThat(pages).isEqualTo(3);
+        assertThat(page.path("nextCursor").isNull()).isTrue();
+
+        JsonNode latest = get("/api/v1/transfers/latest?size=1");
+        assertThat(latest.path("content").size()).isEqualTo(1);
+        assertThat(latest.path("hasNext").asBoolean()).isTrue();
+    }
+
+    @Test
     @DisplayName("daily statistics aggregate the transfers of the UTC day")
     void computesDailyStatistics() {
         String alice = checksum(UsdcTransfers.randomAddress());
@@ -89,11 +125,26 @@ class TransferApiIT extends AbstractIntegrationTest {
         ResponseEntity<JsonNode> untrackedToken = restTemplate.getForEntity(
                 "/api/v1/stats/daily?token={token}", JsonNode.class, UsdcTransfers.randomAddress());
         assertThat(untrackedToken.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+
+        ResponseEntity<JsonNode> forgedCursor = restTemplate.getForEntity(
+                "/api/v1/transfers/latest?cursor={cursor}", JsonNode.class, "not-a-cursor");
+        assertThat(forgedCursor.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(forgedCursor.getBody().path("errors").get(0).path("field").asText()).isEqualTo("cursor");
+        assertThat(forgedCursor.getBody().path("traceId").asText()).isNotBlank();
     }
 
     private void seed(String from, String to, Instant blockTimestamp, String usdc) {
+        seed(from, to, blockTimestamp, 0, UsdcTransfers.randomHash(), usdc);
+    }
+
+    private void seedAnyAddresses(Instant blockTimestamp, int logIndex, String blockHash, String usdc) {
+        seed(checksum(UsdcTransfers.randomAddress()), checksum(UsdcTransfers.randomAddress()), blockTimestamp, logIndex,
+                blockHash, usdc);
+    }
+
+    private void seed(String from, String to, Instant blockTimestamp, int logIndex, String blockHash, String usdc) {
         BigDecimal value = new BigDecimal(usdc);
-        transferRepository.insertUnlessReverted(UsdcTransfers.randomHash(), 0, nextBlockNumber(), UsdcTransfers.randomHash(),
+        transferRepository.insertUnlessReverted(UsdcTransfers.randomHash(), logIndex, nextBlockNumber(), blockHash,
                 blockTimestamp, UsdcTransfers.USDC_CHECKSUM_ADDRESS, from, to, value.movePointRight(6), value, Instant.now());
     }
 
