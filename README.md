@@ -1,4 +1,4 @@
-# Blockchain Handler — агрегатор событий Ethereum
+# StableFlow — агрегатор событий Ethereum
 
 Сервис на Java 21 / Spring Boot 3.5. Что он делает:
 - слушает события `Transfer` контракта USDC (ERC-20) в Ethereum mainnet;
